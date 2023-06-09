@@ -33,8 +33,6 @@ library(tictoc)
 library(vip)
 library(ranger)
 
-
-TEST
 ```
 
 # The problem: predicting credit card fraud
@@ -98,6 +96,7 @@ We also add some of the variables we considered in our EDA for this dataset duri
 ```{r}
 
 library(lubridate)
+
 
 card_fraud <- card_fraud %>% 
   mutate( hour = hour(trans_date_trans_time),
@@ -311,7 +310,7 @@ What steps are you going to add to your recipe? Do you need to do any log transf
 
 ```{r, define_recipe}
 
-#fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) %>%
+fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) #%>%
 
 
 
@@ -322,12 +321,12 @@ What steps are you going to add to your recipe? Do you need to do any log transf
 Once you have your recipe, you can check the pre-processed dataframe
 
 ```{r}
-# prepped_data <- 
-#   fraud_rec %>% # use the recipe object
-#   prep() %>% # perform the recipe on training data
-#   juice() # extract only the preprocessed dataframe 
-# 
-# glimpse(prepped_data)
+ prepped_data <- 
+   fraud_rec %>% # use the recipe object
+   prep() %>% # perform the recipe on training data
+   juice() # extract only the preprocessed dataframe 
+ 
+ glimpse(prepped_data)
 
 ```
 
@@ -348,7 +347,43 @@ You should define the following classification models:
 # 2. set the `engine`
 # 3. Set the `mode`:  classification
 
+# Logistic regression
+log_spec <-  logistic_reg() %>%  # model type
+  set_engine(engine = "glm") %>%  # model engine
+  set_mode("classification") # model mode
 
+# Show your model specification
+log_spec
+
+# Decision Tree
+tree_spec <- decision_tree() %>%
+  set_engine(engine = "C5.0") %>%
+  set_mode("classification")
+
+tree_spec
+
+# Random Forest
+library(ranger)
+
+rf_spec <- 
+  rand_forest() %>% 
+  set_engine("ranger", importance = "impurity") %>% 
+  set_mode("classification")
+
+
+# Boosted tree (XGBoost)
+library(xgboost)
+
+xgb_spec <- 
+  boost_tree() %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification") 
+
+# K-nearest neighbour (k-NN)
+knn_spec <- 
+  nearest_neighbor(neighbors = 4) %>% # we can adjust the number of neighbors 
+  set_engine("kknn") %>% 
+  set_mode("classification") 
 ```
 
 ## Bundle recipe and model with `workflows`
@@ -358,12 +393,37 @@ You should define the following classification models:
 
 ## Bundle recipe and model with `workflows`
 
-# 
-# log_wflow <- # new workflow object
-#  workflow() %>% # use workflow function
-#  add_recipe(fraud_rec) %>%   # use the new recipe
-#  add_model(log_spec)   # add your model spec
+log_wflow <- # new workflow object
+ workflow() %>% # use workflow function
+ add_recipe(fraud_rec) %>%   # use the new recipe
+ add_model(log_spec)   # add your model spec
 
+# show object
+log_wflow
+
+
+
+## A few more workflows
+
+tree_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(tree_spec) 
+
+rf_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(rf_spec) 
+
+xgb_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(xgb_spec)
+
+knn_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(knn_spec)
 ```
 
 ## Fit models
@@ -371,16 +431,16 @@ You should define the following classification models:
 You may want to compare the time it takes to fit each model. `tic()` starts a simple timer and `toc()` stops it
 
 ```{r, fit_models}
-# tic()
-# log_res <- log_wflow %>% 
-#   fit_resamples(
-#     resamples = cv_folds, 
-#     metrics = metric_set(
-#       recall, precision, f_meas, accuracy,
-#       kap, roc_auc, sens, spec),
-#     control = control_resamples(save_pred = TRUE)) 
-# time <- toc()
-# log_time <- time[[4]]
+ tic()
+ log_res <- log_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ log_time <- time[[4]]
 
 
 ```
@@ -390,26 +450,27 @@ You may want to compare the time it takes to fit each model. `tic()` starts a si
 ```{r, compare_models}
 ## Model Comparison
 
-# log_metrics <- 
-#   log_res %>% 
-#   collect_metrics(summarise = TRUE) %>%
-#   # add the name of the model to every row
-#   mutate(model = "Logistic Regression",
-#          time = log_time)
-# 
+ log_metrics <- 
+   log_res %>% 
+   collect_metrics(summarise = TRUE) %>%
+
+     # add the name of the model to every row
+   mutate(model = "Logistic Regression",
+          time = log_time)
+
 # # add mode models here
-# 
+ 
 # # create dataframe with all models
-# model_compare <- bind_rows(log_metrics,
-#                             tree_metrics,
-#                             rf_metrics,
-#                            xgb_metrics,
-#                            knn_metrics
-#                       ) %>% 
-#   # get rid of 'sec elapsed' and turn it into a number
-#   mutate(time = str_sub(time, end = -13) %>% 
-#            as.double()
-#          )
+ model_compare <- bind_rows(log_metrics,
+                             tree_metrics,
+                             rf_metrics,
+                            xgb_metrics,
+                            knn_metrics
+                       ) %>% 
+   # get rid of 'sec elapsed' and turn it into a number
+   mutate(time = str_sub(time, end = -13) %>% 
+            as.double()
+          )
 
 
 ```
@@ -441,17 +502,17 @@ This is a highly imbalanced data set, as roughly 99.5% of all transactions are o
 ```{r}
 ## Final Confusion Matrix
 
-# last_fit_xgb %>%
-#   collect_predictions() %>% 
-#   conf_mat(is_fraud, .pred_class) %>% 
-#   autoplot(type = "heatmap")
-# 
-# 
-# ## Final ROC curve
-# last_fit_xgb %>% 
-#   collect_predictions() %>% 
-#   roc_curve(is_fraud, .pred_1) %>% 
-#   autoplot()
+ last_fit_xgb %>%
+   collect_predictions() %>% 
+   conf_mat(is_fraud, .pred_class) %>% 
+   autoplot(type = "heatmap")
+ 
+ 
+## Final ROC curve
+ last_fit_xgb %>% 
+   collect_predictions() %>% 
+   roc_curve(is_fraud, .pred_1) %>% 
+   autoplot()
 ```
 
 ## Calculating the cost of fraud to the company
@@ -461,48 +522,48 @@ This is a highly imbalanced data set, as roughly 99.5% of all transactions are o
 ```{r}
 #| label: savings-for-cc-company
 
-# best_model_preds <- 
-#   best_model_wflow %>% 
-#   fit(data = card_fraud_train) %>%  
-#   
-#   ## Use `augment()` to get predictions for entire data set
-#   augment(new_data = card_fraud)
-# 
-# best_model_preds %>% 
-#   conf_mat(truth = is_fraud, estimate = .pred_class)
-# 
-# cost <- best_model_preds %>%
-#   select(is_fraud, amt, pred = .pred_class) 
-# 
-# cost <- cost %>%
-#   mutate(
-#   
+ best_model_preds <- 
+   best_model_wflow %>% 
+   fit(data = card_fraud_train) %>%  
+  
+   ## Use `augment()` to get predictions for entire data set
+   augment(new_data = card_fraud)
+ 
+ best_model_preds %>% 
+   conf_mat(truth = is_fraud, estimate = .pred_class)
+ 
+  cost <- best_model_preds %>%
+   select(is_fraud, amt, pred = .pred_class) 
+ 
+ cost <- cost %>%
+   mutate(
+   
 
-  # naive false-- we think every single transaction is ok and not fraud
+   naive false-- we think every single transaction is ok and not fraud
 
 
-  # false negatives-- we thought they were not fraud, but they were
+   false negatives-- we thought they were not fraud, but they were
 
   
   
-  # false positives-- we thought they were fraud, but they were not
+   false positives-- we thought they were fraud, but they were not
 
   
     
-  # true positives-- we thought they were fraud, and they were 
+   true positives-- we thought they were fraud, and they were 
 
 
   
-  # true negatives-- we thought they were ok, and they were 
+   true negatives-- we thought they were ok, and they were 
 
   
-# Summarising
+ #Summarising
 
-# cost_summary <- cost %>% 
-#   summarise(across(starts_with(c("false","true", "amt")), 
-#             ~ sum(.x, na.rm = TRUE)))
-# 
-# cost_summary
+cost_summary <- cost %>% 
+   summarise(across(starts_with(c("false","true", "amt")), 
+             ~ sum(.x, na.rm = TRUE)))
+ 
+cost_summary
 
 ```
 
