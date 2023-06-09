@@ -33,6 +33,8 @@ library(tictoc)
 library(vip)
 library(ranger)
 
+options(scipen = 999)
+
 ```
 
 # The problem: predicting credit card fraud
@@ -97,12 +99,12 @@ We also add some of the variables we considered in our EDA for this dataset duri
 
 library(lubridate)
 
-
+#converting the single transaction date/time column into individual columns for hour, weekday, month and age of cardholder
 card_fraud <- card_fraud %>% 
   mutate( hour = hour(trans_date_trans_time),
           wday = wday(trans_date_trans_time, label = TRUE),
           month_name = month(trans_date_trans_time, label = TRUE),
-          age = interval(dob, trans_date_trans_time) / years(1)
+          age = interval(dob, trans_date_trans_time) / years(1) #determining age of cardholder by taking difference between date of birth and transaction date
 ) %>% 
   
   mutate(
@@ -127,7 +129,7 @@ glimpse(card_fraud)
 
 ## Exploratory Data Analysis (EDA)
 
-You have done some EDA and you can pool together your group's expertise in which variables to use as features. You can reuse your EDA from earlier, but we expect at least a few visualisations and/or tables to explore teh dataset and identify any useful features.
+You have done some EDA and you can pool together your group's expertise in which variables to use as features. You can reuse your EDA from earlier, but we expect at least a few visualisations and/or tables to explore the dataset and identify any useful features.
 
 Group all variables by type and examine each variable class by class. The dataset has the following types of variables:
 
@@ -139,7 +141,7 @@ Group all variables by type and examine each variable class by class. The datase
 
 Strings are usually not a useful format for classification problems. The strings should be converted to factors, dropped, or otherwise transformed.
 
-```{r}
+```{r, warning=FALSE}
 card_fraud$trans_date_trans_time <- as.POSIXct(card_fraud$trans_date_trans_time)
 
 
@@ -174,7 +176,7 @@ ggplot(card_fraud, aes(x = category)) +
     size = 3,
     color = 'black'
   ) +
-  labs(title = 'Transaction Counts by Category', x = 'Category', y = 'Count') +
+  labs(title = "Most card transctions happen at gas stations and grocery stores", subtitle = 'Transaction Counts by Merchant Category', x = 'Category', y = 'Count') +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 
@@ -216,10 +218,14 @@ card_fraud %>%
 
 card_fraud %>% 
   count(job, sort=TRUE) %>% 
-  mutate(perc = n/sum(n))
+  mutate(perc = n/sum(n)) 
+  
 
+#step other?
 
 ```
+
+job 0.001
 
 The predictors `category` and `job` are transformed into factors.
 
@@ -231,6 +237,7 @@ card_fraud <- card_fraud %>%
   mutate(category = factor(category),
          job = factor(job))
 
+glimpse(card_fraud)
 ```
 
 `category` has 14 unique values, and `job` has 494 unique values. The dataset is quite large, with over 670K records, so these variables don't have an excessive number of levels at first glance. However, it is worth seeing if we can compact the levels to a smaller number.
@@ -244,6 +251,23 @@ If I had subject matter expertise, I could manually combine categories. If you d
 ## Do all variables have sensible types?
 
 Consider each variable and decide whether to keep, transform, or drop it. This is a mixture of Exploratory Data Analysis and Feature Engineering, but it's helpful to do some simple feature engineering as you explore the data. In this project, we have all data to begin with, so any transformations will be performed on the entire dataset. Ideally, do the transformations as a `recipe_step()` in the tidymodels framework. Then the transformations would be applied to any data the recipe was used on as part of the modeling workflow. There is less chance of data leakage or missing a step when you perform the feature engineering in the recipe.
+
+```{r}
+
+skim(card_fraud)
+
+```
+
+#Is the transaction year a good predictor?
+
+```{r, assessing year variable as sensible predictor}
+card_fraud %>% 
+  group_by(trans_year) %>% 
+  count(is_fraud, sort=TRUE) %>% 
+  mutate(perc = n/sum(n)) 
+```
+
+We are trying to asses whether we need the transaction year as a predictor for our model. In 2019 The incidence of fraud was 0.57%, while it was 0.63% in 2020. As, the incidence barely changes from year to year and as our transcation year variable can only either take 2019 or 2020 as a value, we predict that this variable will be a very poor predictor and will drop it during feature selection.
 
 ```{r}
 colnames(card_fraud)
@@ -270,16 +294,26 @@ You will be running a series of different models, along the lines of the Califor
 
 Thus, we will work with a smaller sample of 10% of the values the original dataset to identify the best model, and once we have the best model we can use the full dataset to train- test our best model.
 
-```{r}
+
+
+
+
+XXXXXXXX full set for best model!!!
+
+
+
+
+
+```{r, subset selection}
 # select a smaller subset
 my_card_fraud <- card_fraud %>% 
-  # select a smaller subset, 10% of the entire dataframe 
-  slice_sample(prop = 0.10) 
+  
+  slice_sample(prop = 0.10) # 10% of the entire dataframe 
 ```
 
 ## Split the data in training - testing
 
-```{r}
+```{r, initial data split}
 # **Split the data**
 
 set.seed(123)
@@ -343,10 +377,6 @@ You should define the following classification models:
 ```{r, define_models}
 ## Model Building 
 
-# 1. Pick a `model type`
-# 2. set the `engine`
-# 3. Set the `mode`:  classification
-
 # Logistic regression
 log_spec <-  logistic_reg() %>%  # model type
   set_engine(engine = "glm") %>%  # model engine
@@ -389,7 +419,6 @@ knn_spec <-
 ## Bundle recipe and model with `workflows`
 
 ```{r, define_workflows}
-
 
 ## Bundle recipe and model with `workflows`
 
