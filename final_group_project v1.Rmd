@@ -32,6 +32,9 @@ library(here)
 library(tictoc)
 library(vip)
 library(ranger)
+library(tidygeocoder)
+library(sf)
+library(mapview)
 
 options(scipen = 999)
 
@@ -127,6 +130,16 @@ glimpse(card_fraud)
 
 ```
 
+```{r}
+fraud_test <- card_fraud %>% 
+  slice_sample(prop = 0.001) %>% 
+
+  geocode(city = city, state = state, method = "osm")
+
+fraud_test
+```
+
+
 # Exploratory Data Analysis (EDA)
 
 You have done some EDA and you can pool together your group's expertise in which variables to use as features. You can reuse your EDA from earlier, but we expect at least a few visualisations and/or tables to explore the dataset and identify any useful features.
@@ -138,6 +151,21 @@ Group all variables by type and examine each variable class by class. The datase
 3.  Dates
 4.  Date/Times
 5.  Numerical
+
+Strings are usually not a useful format for classification problems. The strings should be converted to factors, dropped, or otherwise transformed.
+
+## Scatterplot - Correlation Matrix
+
+
+```{r, warning=FALSE, message=FALSE}
+
+#plotting the correlation matrix of the dataframe 
+card_fraud %>% 
+  select(is_fraud, amt, city_pop, distance_km, )%>% #selecting the required variables
+  ggpairs(aes(colour=test), alpha=0.2)+
+  theme_bw()
+```
+
 
 Strings are usually not a useful format for classification problems. The strings should be converted to factors, dropped, or otherwise transformed.
 
@@ -154,6 +182,10 @@ card_fraud$state <- as.factor(card_fraud$state)
 
 card_fraud$category <- factor(card_fraud$category, levels = names(sort(table(card_fraud$category))))
 
+#card_fraud <- card_fraud %>% mutate(category = factor(category, 
+                                                    #  levels = names(sort(table(category)))),
+                                   # city = as.factor(city), 
+                                   # state = as.factor(state))
 
 # Summary statistics of transaction amounts by category
 amount_summary <- card_fraud %>%
@@ -191,14 +223,62 @@ print(state_avg_amount)
 # Scatter plot of transaction locations based on latitude and longitude
 ggplot(card_fraud, aes(x = long, y = lat, color = is_fraud)) +
   geom_point() +
-  labs(title = 'Transaction Locations', x = 'Longitude', y = 'Latitude')
+  labs(title = 'Transaction Locations are spread more or less 
+       evenly across the US, \n although there are more in the 
+       Eastern side', x = 'Longitude', y = 'Latitude')
 
 ```
 
-***Strings to Factors***
+The first summary table shows that the travel category has the highest average transaction amount (114.30), and a standard deviation of 622.91. There are 20,873 count values, so it is not the most frequent amount. The second highest mean transaction amount is for groceries (53.65), and a standard deviation which is much lower, (22.69). This makes sense considering that travel tends to be much more expensive and people vary a lot in the amount they spend, whereas grocery is a more frequent purchase of a lesser value and people tend to spend more or less the same.
 
--   `category`, Category of Merchant
--   `job`, Job of Credit Card Holder
+The most frequent transaction belongs to the gas_transport category, followed by grocery (68046 and 63791, respectively). This makes sense considering they are purchases people make very frequently.
+
+The states with the highest average transaction amounts are Delaware, Rhode Island and Vermont (476.77, 100.96 and 83.15, respectively).
+
+Most transactions are cluttered between the longitudes -130 and -60 and latitudes 25 and 50. There seems to be no effect on whether these transactions are fraud or not. There are very few outliers.
+
+## Variable distribution
+
+```{r, variable normality}
+#Assessing the normality
+
+# Create a vector of variable names you want to assess for normality
+variables <- c("amt", "long", "city_pop", "merch_lat", "merch_long", 
+               "hour", "age", "lat1_radians", "lat2_radians", "long1_radians", 
+               "long2_radians", "distance_miles", "distance_km")
+
+# Loop through the variables and create Q-Q plots
+for (var in variables) {
+  qqnorm(card_fraud[[var]], main = paste("Q-Q Plot of", var))
+  qqline(card_fraud[[var]], col = "red")
+}
+```
+
+After assesing the distribution of our number variables, we have come to the conclusion that transaction amount and city population do not follow a normal distribution but rather an exponetial increase and therefore, we will transfor the scales of these variables to logarithmic in the recipes.
+
+## Variable outliers
+
+```{r}
+# Create a vector of variable names you want to include in the boxplots
+variables <- c("trans_year", "amt", "lat", "long", "city_pop", "merch_lat", "merch_long", 
+               "hour", "age", "lat1_radians", "lat2_radians", "long1_radians", 
+               "long2_radians", "distance_miles", "distance_km")
+
+# Create a subset of the data with the selected variables
+subset_df <- card_fraud[, variables]
+
+# Set up the plotting environment
+par(mfrow = c(4, 4))  
+par(mar = c(2, 2, 1, 1))  
+
+# Create boxplots for each variable
+for (i in 1:length(variables)) {
+  boxplot(subset_df[, i], main = variables[i], ylab = "Value")
+}
+```
+
+The variables with most outliers are city population and transaction amount. The outliers have very high values that prevent us from appreciating at the distribution. Distance, age and hour seem to have the least outliers. This analysis reaffirs our decision to change the scale for transaction amount and city population.
+
 
 ***Strings to Geospatial Data***
 
@@ -223,7 +303,7 @@ card_fraud %>%
 
 ```
 
-job 0.001
+Based on these proportions, we think it would be wise to cutoff categories at proportions under 5% and jobs under 0.1%, collapsing 3 and 128 variables respectively into "other". This step will be done in the recipe to preserve continuity.
 
 The predictors `category` and `job` are transformed into factors.
 
@@ -271,7 +351,7 @@ card_fraud %>%
   mutate(perc = n/sum(n)) 
 ```
 
-We are trying to asses whether we need the transaction year as a predictor for our model. In 2019 The incidence of fraud was 0.57%, while it was 0.63% in 2020. As, the incidence barely changes from year to year and as our transcation year variable can only either take 2019 or 2020 as a value, we predict that this variable will be a very poor predictor and will drop it during feature selection.
+We are trying to asses whether we need the transaction year as a predictor for our model. In 2019 The incidence of fraud was 0.57%, while it was 0.63% in 2020. As, the incidence barely changes from year to year and as our transcation year variable can only either take 2019 or 2020 as a value, we predict that this variable will be a very poor predictor and will drop it during feature selection in the recipes.
 
 
 # Model Fit - 1st Iteration
@@ -324,18 +404,20 @@ What steps are you going to add to your recipe? Do you need to do any log transf
 
 fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) %>%
   
-  step_other(category, threshold = .03) %>% 
+  #collapses all merchant categories under 5% to other
+  step_other(category, threshold = .05) %>% 
   
+  #collapses all job categories under 0.1% to other
   step_other(job, threshold = .001) %>% 
+  
+  #Changes the scale of the selected columns to log scale
+  step_log(amt, city_pop)
   
   #Adds a catch-all level to a factor for any new values not encountered in model training, which lets R intelligently predict new levels in the test set.
   step_novel(all_nominal(), -all_outcomes()) %>% # Use *before* `step_dummy()` so new level is dummified
   
   #Converts nominal data into numeric dummy variables
   step_dummy(all_nominal(), -all_outcomes()) %>% 
-  
-  #Intelligently handles zero variance variables (variables that contain only a single value)
-  step_zv(all_numeric(), -all_outcomes())  %>% 
   
   #Centers then scales numeric variable (mean = 0, sd = 1)
   step_normalize(all_numeric()) 
