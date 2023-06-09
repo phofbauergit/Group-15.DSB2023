@@ -127,7 +127,7 @@ glimpse(card_fraud)
 
 ```
 
-## Exploratory Data Analysis (EDA)
+# Exploratory Data Analysis (EDA)
 
 You have done some EDA and you can pool together your group's expertise in which variables to use as features. You can reuse your EDA from earlier, but we expect at least a few visualisations and/or tables to explore the dataset and identify any useful features.
 
@@ -211,7 +211,7 @@ We have plenty of geospatial data as lat/long pairs, so I want to convert city/s
 
 -   Do we have excessive number of categories? Do we want to combine some?
 
-```{r}
+```{r, job and category count}
 card_fraud %>% 
   count(category, sort=TRUE)%>% 
   mutate(perc = n/sum(n))
@@ -220,8 +220,6 @@ card_fraud %>%
   count(job, sort=TRUE) %>% 
   mutate(perc = n/sum(n)) 
   
-
-#step other?
 
 ```
 
@@ -258,7 +256,13 @@ skim(card_fraud)
 
 ```
 
-#Is the transaction year a good predictor?
+## Which variables to keep in your model?
+
+You have a number of variables and you have to decide which ones to use in your model. For instance, you have the latitude/lognitude of the customer, that of the merchant, the same data in radians, as well as the `distance_km` and `distance_miles`. Do you need them all?
+
+###Unnecessary variables we will drop
+
+### Is the transaction year a good predictor?
 
 ```{r, assessing year variable as sensible predictor}
 card_fraud %>% 
@@ -269,40 +273,14 @@ card_fraud %>%
 
 We are trying to asses whether we need the transaction year as a predictor for our model. In 2019 The incidence of fraud was 0.57%, while it was 0.63% in 2020. As, the incidence barely changes from year to year and as our transcation year variable can only either take 2019 or 2020 as a value, we predict that this variable will be a very poor predictor and will drop it during feature selection.
 
-```{r}
-colnames(card_fraud)
-fraud_recipe <- recipe(is_fraud ~ category + amt + city_pop + job + distance_miles + distance_km, data = card_fraud) %>%
-  step_rm(trans_year, city, state, lat, long, dob, merch_lat, merch_long)
 
-# Prepare the recipe
-fraud_recipe_prep <- prep(fraud_recipe)
-
-# Apply the prepared recipe to the dataset
-fraud_data <- bake(fraud_recipe_prep, new_data = card_fraud)
-
-# Check the resulting dataset
-head(fraud_data)
-```
-
-## Which variables to keep in your model?
-
-You have a number of variables and you have to decide which ones to use in your model. For instance, you have the latitude/lognitude of the customer, that of the merchant, the same data in radians, as well as the `distance_km` and `distance_miles`. Do you need them all?
+# Model Fit - 1st Iteration
 
 ## Fit your workflows in smaller sample
 
 You will be running a series of different models, along the lines of the California housing example we have seen in class. However, this dataset has 670K rows and if you try various models and run cross validation on them, your computer may slow down or crash.
 
 Thus, we will work with a smaller sample of 10% of the values the original dataset to identify the best model, and once we have the best model we can use the full dataset to train- test our best model.
-
-
-
-
-
-XXXXXXXX full set for best model!!!
-
-
-
-
 
 ```{r, subset selection}
 # select a smaller subset
@@ -344,7 +322,23 @@ What steps are you going to add to your recipe? Do you need to do any log transf
 
 ```{r, define_recipe}
 
-fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) #%>%
+fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) %>%
+  
+  step_other(category, threshold = .03) %>% 
+  
+  step_other(job, threshold = .001) %>% 
+  
+  #Adds a catch-all level to a factor for any new values not encountered in model training, which lets R intelligently predict new levels in the test set.
+  step_novel(all_nominal(), -all_outcomes()) %>% # Use *before* `step_dummy()` so new level is dummified
+  
+  #Converts nominal data into numeric dummy variables
+  step_dummy(all_nominal(), -all_outcomes()) %>% 
+  
+  #Intelligently handles zero variance variables (variables that contain only a single value)
+  step_zv(all_numeric(), -all_outcomes())  %>% 
+  
+  #Centers then scales numeric variable (mean = 0, sd = 1)
+  step_normalize(all_numeric()) 
 
 
 
@@ -460,6 +454,8 @@ knn_wflow <-
 You may want to compare the time it takes to fit each model. `tic()` starts a simple timer and `toc()` stops it
 
 ```{r, fit_models}
+
+#logistic regression
  tic()
  log_res <- log_wflow %>% 
    fit_resamples(
@@ -471,6 +467,55 @@ You may want to compare the time it takes to fit each model. `tic()` starts a si
  time <- toc()
  log_time <- time[[4]]
 
+ #decision tree
+ tic()
+ tree_res <- tree_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ tree_time <- time[[4]]
+ 
+ #random forest
+ tic()
+ rf_res <- rf_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ rf_time <- time[[4]]
+ 
+ # Boosted tree (XGBoost)
+ tic()
+ xgb_res <- xgb_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ xgb_time <- time[[4]]
+ 
+
+
+# K-nearest neighbour (k-NN)
+ tic()
+ knn_res <- knn_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ knn_time <- time[[4]]
 
 ```
 
@@ -480,55 +525,394 @@ You may want to compare the time it takes to fit each model. `tic()` starts a si
 ## Model Comparison
 
  log_metrics <- 
-   log_res %>% 
-   collect_metrics(summarise = TRUE) %>%
+  log_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  # add the name of the model to every row
+  mutate(model = "Logistic Regression",
+          time = log_time) 
 
-     # add the name of the model to every row
-   mutate(model = "Logistic Regression",
-          time = log_time)
+tree_metrics <- 
+  tree_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Decision Tree",
+          time = tree_time)
 
-# # add mode models here
- 
-# # create dataframe with all models
- model_compare <- bind_rows(log_metrics,
-                             tree_metrics,
-                             rf_metrics,
-                            xgb_metrics,
-                            knn_metrics
-                       ) %>% 
+rf_metrics <- 
+  rf_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Random Forest",
+          time = rf_time)
+
+xgb_metrics <- 
+  xgb_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "XGBoost",
+          time = xgb_time)
+
+knn_metrics <- 
+  knn_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Knn",
+          time = knn_time)
+
+# create dataframe with all models
+model_compare <- bind_rows(log_metrics,
+                           tree_metrics,
+                           rf_metrics,
+                           xgb_metrics,
+                           knn_metrics) %>% 
    # get rid of 'sec elapsed' and turn it into a number
    mutate(time = str_sub(time, end = -13) %>% 
             as.double()
           )
 
 
+#Pivot wider to create barplot
+  model_comp <- model_compare %>% 
+  select(model, .metric, mean, std_err) %>% 
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err)) 
+
+# show mean are under the curve (ROC-AUC) for every model
+model_comp %>% 
+  arrange(mean_roc_auc) %>% 
+  mutate(model = fct_reorder(model, mean_roc_auc)) %>% # order results
+  ggplot(aes(model, mean_roc_auc, fill=model)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Blues") +
+   geom_text(
+     size = 3,
+     aes(label = round(mean_roc_auc, 2), 
+         y = mean_roc_auc + 0.08),
+     vjust = 1
+  )+
+  theme_light()+
+  theme(legend.position = "none")+
+  labs(y = NULL)
+ 
+ 
 ```
 
 ## Which metric to use
 
 This is a highly imbalanced data set, as roughly 99.5% of all transactions are ok, and it's only 0.5% of transactions that are fraudulent. A `naive` model, which classifies everything as ok and not-fraud, would have an accuracy of 99.5%, but what about the sensitivity, specificity, the AUC, etc?
 
-## `last_fit()`
+## Get variable importance using `vip` package
+
+- Looking at the variable importance of the current best model
+
+```{r, variable importance}
+
+library(vip)
+
+last_fit_log %>% 
+  pluck(".workflow", 1) %>%   
+  pull_workflow_fit() %>% 
+  vip(num_features = 10) +
+  theme_light()
+
+```
+
+# Model Fit - 2nd Iteration
+
+## Update the tidymodels `recipe`
+
+What steps are you going to add to your recipe? Do you need to do any log transformations?
+
+```{r, update_recipe}
+
+fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) #%>%
+
+
+
+
+
+```
+
+Once you have your recipe, you can check the pre-processed dataframe
+
+```{r, check updated recipe}
+ prepped_data <- 
+   fraud_rec %>% # use the recipe object
+   prep() %>% # perform the recipe on training data
+   juice() # extract only the preprocessed dataframe 
+ 
+ glimpse(prepped_data)
+
+```
+
+## Bundle new recipe and model with `workflows`
+
+```{r, define_new_workflows}
+
+## Bundle new recipe and model with `workflows`
+
+log_wflow <- # new workflow object
+ workflow() %>% # use workflow function
+ add_recipe(fraud_rec) %>%   # use the new recipe
+ add_model(log_spec)   # add your model spec
+
+tree_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(tree_spec) 
+
+rf_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(rf_spec) 
+
+xgb_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(xgb_spec)
+
+knn_wflow <-
+ workflow() %>%
+ add_recipe(fraud_rec) %>% 
+ add_model(knn_spec)
+```
+
+## Fit new models
+
+
+```{r, fit_new_models}
+
+#logistic regression
+ tic()
+ log_res <- log_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ log_time <- time[[4]]
+
+ #decision tree
+ tic()
+ tree_res <- tree_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ tree_time <- time[[4]]
+ 
+ #random forest
+ tic()
+ rf_res <- rf_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ rf_time <- time[[4]]
+ 
+ # Boosted tree (XGBoost)
+ tic()
+ xgb_res <- xgb_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ xgb_time <- time[[4]]
+ 
+
+
+# K-nearest neighbour (k-NN)
+ tic()
+ knn_res <- knn_wflow %>% 
+   fit_resamples(
+     resamples = cv_folds, 
+     metrics = metric_set(
+       recall, precision, f_meas, accuracy,
+       kap, roc_auc, sens, spec),
+     control = control_resamples(save_pred = TRUE)) 
+ time <- toc()
+ knn_time <- time[[4]]
+
+```
+
+## Compare new models
+
+```{r, compare_models}
+## Model Comparison
+
+ log_metrics <- 
+  log_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  # add the name of the model to every row
+  mutate(model = "Logistic Regression",
+          time = log_time) 
+
+tree_metrics <- 
+  tree_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Decision Tree",
+          time = tree_time)
+
+rf_metrics <- 
+  rf_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Random Forest",
+          time = rf_time)
+
+xgb_metrics <- 
+  xgb_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "XGBoost",
+          time = xgb_time)
+
+knn_metrics <- 
+  knn_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Knn",
+          time = knn_time)
+
+# create dataframe with all models
+model_compare <- bind_rows(log_metrics,
+                           tree_metrics,
+                           rf_metrics,
+                           xgb_metrics,
+                           knn_metrics) %>% 
+   # get rid of 'sec elapsed' and turn it into a number
+   mutate(time = str_sub(time, end = -13) %>% 
+            as.double()
+          )
+
+
+#Pivot wider to create barplot
+  model_comp <- model_compare %>% 
+  select(model, .metric, mean, std_err) %>% 
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err)) 
+
+# show mean are under the curve (ROC-AUC) for every model
+model_comp %>% 
+  arrange(mean_roc_auc) %>% 
+  mutate(model = fct_reorder(model, mean_roc_auc)) %>% # order results
+  ggplot(aes(model, mean_roc_auc, fill=model)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Blues") +
+   geom_text(
+     size = 3,
+     aes(label = round(mean_roc_auc, 2), 
+         y = mean_roc_auc + 0.08),
+     vjust = 1
+  )+
+  theme_light()+
+  theme(legend.position = "none")+
+  labs(y = NULL)
+ 
+ 
+```
+
+## Get variable importance using `vip` package
+
+```{r, variable importance 2}
+
+library(vip)
+
+last_fit_log %>% 
+  pluck(".workflow", 1) %>%   
+  pull_workflow_fit() %>% 
+  vip(num_features = 10) +
+  theme_light()
+
+```
+
+# Model Fit - Final Iteration
+
+## Cross Validation
+
+Start with 3 CV folds to quickly get an estimate for the best model and you can increase the number of folds to 5 or 10 later.
 
 ```{r}
+set.seed(123)
+cv_folds_full <- vfold_cv(data = card_fraud_train, 
+                          v = 10, 
+                          strata = is_fraud)
+cv_folds_full 
+```
+
+## Refitting final model
+
+```{r}
+log_res_full <- log_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds_full, 
+    metrics = metric_set(
+     recall, precision, f_meas, accuracy,
+     kap, roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)) 
+
+# Show average performance over all folds (note that we use log_res):
+log_res_full %>%  collect_metrics(summarize = TRUE)
+```
+
+## Splitting full dataset
+
+```{r, full data split}
+# **Split the data**
+
+set.seed(123)
+
+data_split_full <- initial_split(card_fraud, # updated data
+                           prop = 0.8, 
+                           strata = is_fraud)
+
+#card_fraud_train <- training(data_split) 
+#card_fraud_test <- testing(data_split)
+```
+
+## Last fit with full dataset
+
+```{r, last fit}
 
 ## `last_fit()` on test set
 
 # - `last_fit()`  fits a model to the whole training data and evaluates it on the test set. 
 # - provide the workflow object of the best model as well as the data split object (not the training data). 
  
+last_fit_log <- last_fit(log_wflow, 
+                        split = data_split_full,
+                        metrics = metric_set(
+                          accuracy, f_meas, kap, precision,
+                          recall, roc_auc, sens, spec))
+
+last_fit_log %>% collect_metrics(summarize = TRUE)
+
+#Compare to training
+log_res_full %>% collect_metrics(summarize = TRUE)
 
 ```
 
 ## Get variable importance using `vip` package
 
-```{r}
+```{r, variable importance final}
+
+library(vip)
+
+last_fit_log %>% 
+  pluck(".workflow", 1) %>%   
+  pull_workflow_fit() %>% 
+  vip(num_features = 10) +
+  theme_light()
 
 ```
 
 ## Plot Final Confusion matrix and ROC curve
 
-```{r}
+```{r, final confusion matrix and roc curve}
 ## Final Confusion Matrix
 
  last_fit_xgb %>%
