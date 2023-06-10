@@ -3,10 +3,6 @@ title: "Final Group project"
 author: "Your name goes here"
 date: "`r Sys.Date()`"
 output:
-  word_document:
-    toc: yes
-  pdf_document:
-    toc: yes
   html_document:
     theme: flatly
     highlight: zenburn
@@ -14,6 +10,10 @@ output:
     toc: yes
     toc_float: yes
     code_folding: show
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
 ---
 
 ```{r}
@@ -35,6 +35,8 @@ library(ranger)
 library(tidygeocoder)
 library(sf)
 library(mapview)
+library(ggplot2)
+library(GGally)
 
 options(scipen = 999)
 
@@ -130,15 +132,6 @@ glimpse(card_fraud)
 
 ```
 
-```{r}
-fraud_test <- card_fraud %>% 
-  slice_sample(prop = 0.001) %>% 
-
-  geocode(city = city, state = state, method = "osm")
-
-fraud_test
-```
-
 
 # Exploratory Data Analysis (EDA)
 
@@ -161,11 +154,16 @@ Strings are usually not a useful format for classification problems. The strings
 
 #plotting the correlation matrix of the dataframe 
 card_fraud %>% 
-  select(is_fraud, amt, city_pop, distance_km, )%>% #selecting the required variables
-  ggpairs(aes(colour=test), alpha=0.2)+
+  slice_sample(prop = 0.01) %>%
+  select(is_fraud, amt, city_pop, distance_km, age, lat, long )%>% #selecting the required variables
+  ggpairs(aes(colour=is_fraud), alpha=0.2)+
   theme_bw()
 ```
 
+The dataframe is too large to plot it fully so we slice 1% of it and analyze the correlations. On first sight, no variables seem to have any meaningful correlations to each other, but the differences in correlation between fraud and non-fraud categories is quite interesting. For example when there is fraud, city popoulation and transaction amount are much more correlated than if there isn't fraud. An observation we make is that the average transaction amount for fraud transactions is signifficantly higher, although the max amount is higher for non-fraud transactions. 
+
+
+## Factorization and simple sumary statistics
 
 Strings are usually not a useful format for classification problems. The strings should be converted to factors, dropped, or otherwise transformed.
 
@@ -242,6 +240,10 @@ Most transactions are cluttered between the longitudes -130 and -60 and latitude
 ```{r, variable normality}
 #Assessing the normality
 
+my_card_fraud <- card_fraud %>% 
+  
+  slice_sample(prop = 0.10) 
+
 # Create a vector of variable names you want to assess for normality
 variables <- c("amt", "long", "city_pop", "merch_lat", "merch_long", 
                "hour", "age", "lat1_radians", "lat2_radians", "long1_radians", 
@@ -249,8 +251,8 @@ variables <- c("amt", "long", "city_pop", "merch_lat", "merch_long",
 
 # Loop through the variables and create Q-Q plots
 for (var in variables) {
-  qqnorm(card_fraud[[var]], main = paste("Q-Q Plot of", var))
-  qqline(card_fraud[[var]], col = "red")
+  qqnorm(my_card_fraud[[var]], main = paste("Q-Q Plot of", var))
+  qqline(my_card_fraud[[var]], col = "red")
 }
 ```
 
@@ -265,7 +267,7 @@ variables <- c("trans_year", "amt", "lat", "long", "city_pop", "merch_lat", "mer
                "long2_radians", "distance_miles", "distance_km")
 
 # Create a subset of the data with the selected variables
-subset_df <- card_fraud[, variables]
+subset_df <- my_card_fraud[, variables]
 
 # Set up the plotting environment
 par(mfrow = c(4, 4))  
@@ -329,12 +331,6 @@ If I had subject matter expertise, I could manually combine categories. If you d
 ## Do all variables have sensible types?
 
 Consider each variable and decide whether to keep, transform, or drop it. This is a mixture of Exploratory Data Analysis and Feature Engineering, but it's helpful to do some simple feature engineering as you explore the data. In this project, we have all data to begin with, so any transformations will be performed on the entire dataset. Ideally, do the transformations as a `recipe_step()` in the tidymodels framework. Then the transformations would be applied to any data the recipe was used on as part of the modeling workflow. There is less chance of data leakage or missing a step when you perform the feature engineering in the recipe.
-
-```{r}
-
-skim(card_fraud)
-
-```
 
 ## Which variables to keep in your model?
 
@@ -404,14 +400,17 @@ What steps are you going to add to your recipe? Do you need to do any log transf
 
 fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) %>%
   
+  #drop columns identified during EDA to not be relevant or unnecessary
+  step_rm(trans_year, trans_date_trans_time, dob, lat1_radians, lat2_radians, long1_radians, long2_radians, distance_miles, city, state, lat, long, merch_lat, merch_long) %>% 
+  
   #collapses all merchant categories under 5% to other
   step_other(category, threshold = .05) %>% 
   
   #collapses all job categories under 0.1% to other
-  step_other(job, threshold = .001) %>% 
+  step_other(job, threshold = .003) %>% 
   
   #Changes the scale of the selected columns to log scale
-  step_log(amt, city_pop)
+  step_log(amt, city_pop) %>% 
   
   #Adds a catch-all level to a factor for any new values not encountered in model training, which lets R intelligently predict new levels in the test set.
   step_novel(all_nominal(), -all_outcomes()) %>% # Use *before* `step_dummy()` so new level is dummified
@@ -419,10 +418,11 @@ fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) %>%
   #Converts nominal data into numeric dummy variables
   step_dummy(all_nominal(), -all_outcomes()) %>% 
   
+  #Intelligently handles zero variance variables (variables that contain only a single value)
+  step_zv(all_numeric(), -all_outcomes())  %>% 
+  
   #Centers then scales numeric variable (mean = 0, sd = 1)
   step_normalize(all_numeric()) 
-
-
 
 
 
@@ -450,7 +450,7 @@ You should define the following classification models:
 4.  A boosted tree using Extreme Gradient Boosting, and the `xgboost` engine
 5.  A k-nearest neighbours, using 4 nearest_neighbors and the `kknn` engine
 
-```{r, define_models}
+```{r, define_models, warning=FALSE, error=TRUE}
 ## Model Building 
 
 # Logistic regression
@@ -550,16 +550,16 @@ You may want to compare the time it takes to fit each model. `tic()` starts a si
  log_time <- time[[4]]
 
  #decision tree
- tic()
- tree_res <- tree_wflow %>% 
-   fit_resamples(
-     resamples = cv_folds, 
-     metrics = metric_set(
-       recall, precision, f_meas, accuracy,
-       kap, roc_auc, sens, spec),
-     control = control_resamples(save_pred = TRUE)) 
- time <- toc()
- tree_time <- time[[4]]
+ #tic()
+ #tree_res <- tree_wflow %>% 
+ #  fit_resamples(
+ #    resamples = cv_folds, 
+#     metrics = metric_set(
+#       recall, precision, f_meas, accuracy,
+#       kap, roc_auc, sens, spec),
+#     control = control_resamples(save_pred = TRUE)) 
+# time <- toc()
+# tree_time <- time[[4]]
  
  #random forest
  tic()
@@ -588,16 +588,16 @@ You may want to compare the time it takes to fit each model. `tic()` starts a si
 
 
 # K-nearest neighbour (k-NN)
- tic()
- knn_res <- knn_wflow %>% 
-   fit_resamples(
-     resamples = cv_folds, 
-     metrics = metric_set(
-       recall, precision, f_meas, accuracy,
-       kap, roc_auc, sens, spec),
-     control = control_resamples(save_pred = TRUE)) 
- time <- toc()
- knn_time <- time[[4]]
+# tic()
+# knn_res <- knn_wflow %>% 
+#   fit_resamples(
+#     resamples = cv_folds, 
+#     metrics = metric_set(
+#       recall, precision, f_meas, accuracy,
+#       kap, roc_auc, sens, spec),
+#     control = control_resamples(save_pred = TRUE)) 
+# time <- toc()
+# knn_time <- time[[4]]
 
 ```
 
@@ -613,11 +613,11 @@ You may want to compare the time it takes to fit each model. `tic()` starts a si
   mutate(model = "Logistic Regression",
           time = log_time) 
 
-tree_metrics <- 
-  tree_res %>% 
-  collect_metrics(summarise = TRUE) %>%
-  mutate(model = "Decision Tree",
-          time = tree_time)
+#tree_metrics <- 
+#  tree_res %>% 
+#  collect_metrics(summarise = TRUE) %>%
+#  mutate(model = "Decision Tree",
+#          time = tree_time)
 
 rf_metrics <- 
   rf_res %>% 
@@ -631,18 +631,17 @@ xgb_metrics <-
   mutate(model = "XGBoost",
           time = xgb_time)
 
-knn_metrics <- 
-  knn_res %>% 
-  collect_metrics(summarise = TRUE) %>%
-  mutate(model = "Knn",
-          time = knn_time)
+#knn_metrics <- 
+#  knn_res %>% 
+#  collect_metrics(summarise = TRUE) %>%
+#  mutate(model = "Knn",
+#          time = knn_time)
 
 # create dataframe with all models
 model_compare <- bind_rows(log_metrics,
-                           tree_metrics,
+                           
                            rf_metrics,
-                           xgb_metrics,
-                           knn_metrics) %>% 
+                           xgb_metrics) %>% 
    # get rid of 'sec elapsed' and turn it into a number
    mutate(time = str_sub(time, end = -13) %>% 
             as.double()
@@ -674,272 +673,22 @@ model_comp %>%
  
  
 ```
+
+The Boosted Tree odel seems to have the best roc_auc out of all models at 0.98 and it also computes the fastest at a runtime of 20.56s. Therefore, for our final model we will proceed with XGB. Normal tree and knn have runtimes that are way too large and will be deactivated for knitting.
 
 ## Which metric to use
 
-This is a highly imbalanced data set, as roughly 99.5% of all transactions are ok, and it's only 0.5% of transactions that are fraudulent. A `naive` model, which classifies everything as ok and not-fraud, would have an accuracy of 99.5%, but what about the sensitivity, specificity, the AUC, etc?
+In the context of fraud detection we want to ake sure that the number of false negatives is the lwoest as the cost for that is higher than false positives for banks that's why we focus on recall. It measures the proportion of actual positive instances (fraudulent transactions) that are correctly identified as positive by the model. Maximizing recall helps minimize false negatives, ensuring that fraudulent transactions are detected and mitigating potential financial losses
 
-## Get variable importance using `vip` package
+```{r}
 
-- Looking at the variable importance of the current best model
-
-```{r, variable importance}
-
-library(vip)
-
-last_fit_log %>% 
-  pluck(".workflow", 1) %>%   
-  pull_workflow_fit() %>% 
-  vip(num_features = 10) +
-  theme_light()
+model_comp
 
 ```
+Out of all models, XGB has the highest recall and will therefore create the best results.
 
-# Model Fit - 2nd Iteration
-
-## Update the tidymodels `recipe`
-
-What steps are you going to add to your recipe? Do you need to do any log transformations?
-
-```{r, update_recipe}
-
-fraud_rec <- recipe(is_fraud ~ ., data = card_fraud_train) #%>%
-
-
-
-
-
-```
-
-Once you have your recipe, you can check the pre-processed dataframe
-
-```{r, check updated recipe}
- prepped_data <- 
-   fraud_rec %>% # use the recipe object
-   prep() %>% # perform the recipe on training data
-   juice() # extract only the preprocessed dataframe 
- 
- glimpse(prepped_data)
-
-```
-
-## Bundle new recipe and model with `workflows`
-
-```{r, define_new_workflows}
-
-## Bundle new recipe and model with `workflows`
-
-log_wflow <- # new workflow object
- workflow() %>% # use workflow function
- add_recipe(fraud_rec) %>%   # use the new recipe
- add_model(log_spec)   # add your model spec
-
-tree_wflow <-
- workflow() %>%
- add_recipe(fraud_rec) %>% 
- add_model(tree_spec) 
-
-rf_wflow <-
- workflow() %>%
- add_recipe(fraud_rec) %>% 
- add_model(rf_spec) 
-
-xgb_wflow <-
- workflow() %>%
- add_recipe(fraud_rec) %>% 
- add_model(xgb_spec)
-
-knn_wflow <-
- workflow() %>%
- add_recipe(fraud_rec) %>% 
- add_model(knn_spec)
-```
-
-## Fit new models
-
-
-```{r, fit_new_models}
-
-#logistic regression
- tic()
- log_res <- log_wflow %>% 
-   fit_resamples(
-     resamples = cv_folds, 
-     metrics = metric_set(
-       recall, precision, f_meas, accuracy,
-       kap, roc_auc, sens, spec),
-     control = control_resamples(save_pred = TRUE)) 
- time <- toc()
- log_time <- time[[4]]
-
- #decision tree
- tic()
- tree_res <- tree_wflow %>% 
-   fit_resamples(
-     resamples = cv_folds, 
-     metrics = metric_set(
-       recall, precision, f_meas, accuracy,
-       kap, roc_auc, sens, spec),
-     control = control_resamples(save_pred = TRUE)) 
- time <- toc()
- tree_time <- time[[4]]
- 
- #random forest
- tic()
- rf_res <- rf_wflow %>% 
-   fit_resamples(
-     resamples = cv_folds, 
-     metrics = metric_set(
-       recall, precision, f_meas, accuracy,
-       kap, roc_auc, sens, spec),
-     control = control_resamples(save_pred = TRUE)) 
- time <- toc()
- rf_time <- time[[4]]
- 
- # Boosted tree (XGBoost)
- tic()
- xgb_res <- xgb_wflow %>% 
-   fit_resamples(
-     resamples = cv_folds, 
-     metrics = metric_set(
-       recall, precision, f_meas, accuracy,
-       kap, roc_auc, sens, spec),
-     control = control_resamples(save_pred = TRUE)) 
- time <- toc()
- xgb_time <- time[[4]]
- 
-
-
-# K-nearest neighbour (k-NN)
- tic()
- knn_res <- knn_wflow %>% 
-   fit_resamples(
-     resamples = cv_folds, 
-     metrics = metric_set(
-       recall, precision, f_meas, accuracy,
-       kap, roc_auc, sens, spec),
-     control = control_resamples(save_pred = TRUE)) 
- time <- toc()
- knn_time <- time[[4]]
-
-```
-
-## Compare new models
-
-```{r, compare_models}
-## Model Comparison
-
- log_metrics <- 
-  log_res %>% 
-  collect_metrics(summarise = TRUE) %>%
-  # add the name of the model to every row
-  mutate(model = "Logistic Regression",
-          time = log_time) 
-
-tree_metrics <- 
-  tree_res %>% 
-  collect_metrics(summarise = TRUE) %>%
-  mutate(model = "Decision Tree",
-          time = tree_time)
-
-rf_metrics <- 
-  rf_res %>% 
-  collect_metrics(summarise = TRUE) %>%
-  mutate(model = "Random Forest",
-          time = rf_time)
-
-xgb_metrics <- 
-  xgb_res %>% 
-  collect_metrics(summarise = TRUE) %>%
-  mutate(model = "XGBoost",
-          time = xgb_time)
-
-knn_metrics <- 
-  knn_res %>% 
-  collect_metrics(summarise = TRUE) %>%
-  mutate(model = "Knn",
-          time = knn_time)
-
-# create dataframe with all models
-model_compare <- bind_rows(log_metrics,
-                           tree_metrics,
-                           rf_metrics,
-                           xgb_metrics,
-                           knn_metrics) %>% 
-   # get rid of 'sec elapsed' and turn it into a number
-   mutate(time = str_sub(time, end = -13) %>% 
-            as.double()
-          )
-
-
-#Pivot wider to create barplot
-  model_comp <- model_compare %>% 
-  select(model, .metric, mean, std_err) %>% 
-  pivot_wider(names_from = .metric, values_from = c(mean, std_err)) 
-
-# show mean are under the curve (ROC-AUC) for every model
-model_comp %>% 
-  arrange(mean_roc_auc) %>% 
-  mutate(model = fct_reorder(model, mean_roc_auc)) %>% # order results
-  ggplot(aes(model, mean_roc_auc, fill=model)) +
-  geom_col() +
-  coord_flip() +
-  scale_fill_brewer(palette = "Blues") +
-   geom_text(
-     size = 3,
-     aes(label = round(mean_roc_auc, 2), 
-         y = mean_roc_auc + 0.08),
-     vjust = 1
-  )+
-  theme_light()+
-  theme(legend.position = "none")+
-  labs(y = NULL)
- 
- 
-```
-
-## Get variable importance using `vip` package
-
-```{r, variable importance 2}
-
-library(vip)
-
-last_fit_log %>% 
-  pluck(".workflow", 1) %>%   
-  pull_workflow_fit() %>% 
-  vip(num_features = 10) +
-  theme_light()
-
-```
 
 # Model Fit - Final Iteration
-
-## Cross Validation
-
-Start with 3 CV folds to quickly get an estimate for the best model and you can increase the number of folds to 5 or 10 later.
-
-```{r}
-set.seed(123)
-cv_folds_full <- vfold_cv(data = card_fraud_train, 
-                          v = 10, 
-                          strata = is_fraud)
-cv_folds_full 
-```
-
-## Refitting final model
-
-```{r}
-log_res_full <- log_wflow %>% 
-  fit_resamples(
-    resamples = cv_folds_full, 
-    metrics = metric_set(
-     recall, precision, f_meas, accuracy,
-     kap, roc_auc, sens, spec),
-    control = control_resamples(save_pred = TRUE)) 
-
-# Show average performance over all folds (note that we use log_res):
-log_res_full %>%  collect_metrics(summarize = TRUE)
-```
 
 ## Splitting full dataset
 
@@ -965,18 +714,21 @@ data_split_full <- initial_split(card_fraud, # updated data
 # - `last_fit()`  fits a model to the whole training data and evaluates it on the test set. 
 # - provide the workflow object of the best model as well as the data split object (not the training data). 
  
-last_fit_log <- last_fit(log_wflow, 
+last_fit_xgb <- last_fit(xgb_wflow, 
                         split = data_split_full,
                         metrics = metric_set(
                           accuracy, f_meas, kap, precision,
                           recall, roc_auc, sens, spec))
 
-last_fit_log %>% collect_metrics(summarize = TRUE)
+last_fit_xgb %>% collect_metrics(summarize = TRUE)
 
 #Compare to training
-log_res_full %>% collect_metrics(summarize = TRUE)
+xgb_res %>% collect_metrics(summarize = TRUE)
 
 ```
+
+With a recall of 0.754, we have a great model to predict with.
+
 
 ## Get variable importance using `vip` package
 
@@ -984,13 +736,15 @@ log_res_full %>% collect_metrics(summarize = TRUE)
 
 library(vip)
 
-last_fit_log %>% 
+last_fit_xgb %>% 
   pluck(".workflow", 1) %>%   
   pull_workflow_fit() %>% 
   vip(num_features = 10) +
   theme_light()
 
 ```
+
+As expected, transaction aount is the most important variable.
 
 ## Plot Final Confusion matrix and ROC curve
 
@@ -1010,62 +764,5 @@ last_fit_log %>%
    autoplot()
 ```
 
-## Calculating the cost of fraud to the company
+Unfortunately, the model still has a number of false negatives, but predicts true positives in a higher level.
 
--   How much money (in US\$ terms) are fraudulent transactions costing the company? Generate a table that summarizes the total amount of legitimate and fraudulent transactions per year and calculate the % of fraudulent transactions, in US\$ terms. Compare your model vs the naive classification that we do not have any fraudulent transactions.
-
-```{r}
-#| label: savings-for-cc-company
-
- best_model_preds <- 
-   best_model_wflow %>% 
-   fit(data = card_fraud_train) %>%  
-  
-   ## Use `augment()` to get predictions for entire data set
-   augment(new_data = card_fraud)
- 
- best_model_preds %>% 
-   conf_mat(truth = is_fraud, estimate = .pred_class)
- 
-  cost <- best_model_preds %>%
-   select(is_fraud, amt, pred = .pred_class) 
- 
- cost <- cost %>%
-   mutate(
-   
-
-   naive false-- we think every single transaction is ok and not fraud
-
-
-   false negatives-- we thought they were not fraud, but they were
-
-  
-  
-   false positives-- we thought they were fraud, but they were not
-
-  
-    
-   true positives-- we thought they were fraud, and they were 
-
-
-  
-   true negatives-- we thought they were ok, and they were 
-
-  
- #Summarising
-
-cost_summary <- cost %>% 
-   summarise(across(starts_with(c("false","true", "amt")), 
-             ~ sum(.x, na.rm = TRUE)))
- 
-cost_summary
-
-```
-
--   If we use a naive classifier thinking that all transactions are legitimate and not fraudulent, the cost to the company is `r scales::dollar(cost_summary$false_naives)`.
-
--   With our best model, the total cost of false negatives, namely transactions our classifier thinks are legitimate but which turned out to be fraud, is `r scales::dollar(cost_summary$false_negatives)`.
-
--   Our classifier also has some false positives, `r scales::dollar(cost_summary$false_positives)`, namely flagging transactions as fraudulent, but which were legitimate. Assuming the card company makes around 2% for each transaction (source: <https://startups.co.uk/payment-processing/credit-card-processing-fees/>), the amount of money lost due to these false positives is `r scales::dollar(cost_summary$false_positives * 0.02)`
-
--   The \$ improvement over the naive policy is `r scales::dollar(cost_summary$false_naives - cost_summary$false_negatives - cost_summary$false_positives * 0.02)`.
