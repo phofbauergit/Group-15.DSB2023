@@ -1,0 +1,33 @@
+{
+  "head": "3d41079bf0299ab9bf78317c1b3ad8e07d4a3e7e",
+  "branches": [
+    "main"
+  ],
+  "commits": 12,
+  "history_lock_or_session_files": [],
+  "documents_scanned_at_head": 2,
+  "session_hits": [],
+  "declared_packages": [
+    "GGally",
+    "ggplot2",
+    "here",
+    "kknn",
+    "lubridate",
+    "mapview",
+    "ranger",
+    "sf",
+    "skimr",
+    "tictoc",
+    "tidygeocoder",
+    "tidymodels",
+    "tidyverse",
+    "vip",
+    "xgboost"
+  ],
+  "cache_headers": [],
+  "github_actions_artifact_count": 0,
+  "github_actions_run_count": 0,
+  "github_release_tags": [],
+  "history_text_blobs_scanned": 10,
+  "history_text_indicators": []
+}
